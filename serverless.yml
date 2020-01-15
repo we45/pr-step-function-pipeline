@@ -1,0 +1,106 @@
+service: sast-sca-python
+
+
+provider:
+  name: aws
+  runtime: python3.7
+  stage: dev
+  region: us-west-2
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action: 
+        - "ssm:GetParameters"
+        - "ssm:GetParameter"
+      Resource:
+        - "*"
+
+package:
+  exclude:
+    - node_modules/**
+
+
+plugins:
+  - serverless-python-requirements
+  - serverless-step-functions
+functions:
+  bandit:
+    handler: handler.run_bandit
+    timeout: 500
+    memorySize: 2048
+    layers: 
+      - arn:aws:lambda:us-west-2:553035198032:layer:git:9
+  safety:
+    handler: handler.run_safety
+    timeout: 500
+    memorySize: 2048
+    layers: 
+      - arn:aws:lambda:us-west-2:553035198032:layer:git:9
+  write-sast-to-pr:
+      handler: handler.sast_pr_comment
+      timeout: 500
+      memorySize: 2048
+      layers: 
+        - arn:aws:lambda:us-west-2:553035198032:layer:git:9
+  write-sca-to-pr:
+      handler: handler.sca_pr_comment
+      timeout: 500
+      memorySize: 2048
+      layers: 
+        - arn:aws:lambda:us-west-2:553035198032:layer:git:9
+  check-python-files:
+    handler: handler.check_python_files
+    timeout: 30
+    layers: 
+      - arn:aws:lambda:us-west-2:553035198032:layer:git:9
+
+stepFunctions:
+  stateMachines:
+    sast-sca-machine:
+      name: sast-sca-machine
+      events:
+        - http:
+            path: /trigger-sast-sca
+            method: POST
+      definition: 
+        Comment: A Simple Example of Chaining SAST and SCA Workflows with nothing more than AWS lambda against a Github PR Commit
+        StartAt: CheckPythonFiles
+        States:
+          CheckPythonFiles:
+            Type: Task
+            Resource: 
+              Fn::GetAtt: [check-python-files, Arn]
+            Next: HasPythonFiles
+          HasPythonFiles:
+            Type: Choice
+            Choices:
+              - Variable: $.is_python
+                BooleanEquals: true
+                Next: Bandit-SAST
+            Default: HasRequirementsChanges
+          Bandit-SAST:
+            Type: Task
+            Resource: 
+              Fn::GetAtt: [bandit, Arn]
+            Next: Bandit-Write-to-Pr
+          Bandit-Write-to-Pr: 
+            Type: Task
+            Resource:
+              Fn::GetAtt: [write-sast-to-pr, Arn]
+            Next: HasRequirementsChanges
+          HasRequirementsChanges:
+            Type: Choice
+            Choices:
+              - Variable: $.is_requirements
+                BooleanEquals: true
+                Next: Safety-SCA
+            Default: Safety-SCA
+          Safety-SCA: 
+            Type: Task
+            Resource:
+              Fn::GetAtt: [safety, Arn]
+            Next: Write-Safety-to-Pr
+          Write-Safety-to-Pr: 
+            Type: Task
+            Resource:
+              Fn::GetAtt: [write-sca-to-pr, Arn]
+            End: true

@@ -1,0 +1,5 @@
+PyGithub
+bandit
+safety
+loguru
+simplejson
